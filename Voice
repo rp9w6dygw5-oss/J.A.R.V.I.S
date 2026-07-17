@@ -1,0 +1,121 @@
+import Foundation
+import Speech
+import AVFoundation
+import Combine
+
+/// Modulo centrale per ascolto e risposta vocale dell'assistente.
+/// Richiede in Info.plist: NSMicrophoneUsageDescription, NSSpeechRecognitionUsageDescription
+@MainActor
+final class VoiceEngine: NSObject, ObservableObject {
+
+    @Published var isListening: Bool = false
+    @Published var isSpeaking: Bool = false
+    @Published var transcribedText: String = ""
+    @Published var lastError: String?
+
+    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "it-IT"))
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private let audioEngine = AVAudioEngine()
+    private let synthesizer = AVSpeechSynthesizer()
+
+    /// Callback invocata quando l'utente ha finito di parlare (silenzio rilevato o stop manuale)
+    var onCommandReady: ((String) -> Void)?
+
+    private var speechCompletion: (() -> Void)?
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    // MARK: - Autorizzazioni
+
+    func requestAuthorization() async -> Bool {
+        let speechStatus = await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+        let micGranted = await AVAudioApplication.requestRecordPermission()
+        return speechStatus == .authorized && micGranted
+    }
+
+    // MARK: - Ascolto
+
+    func startListening() throws {
+        // Interrompe eventuale task precedente
+        recognitionTask?.cancel()
+        recognitionTask = nil
+
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playAndRecord, mode: .measurement, options: .duckOthers)
+        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        recognitionRequest = request
+
+        guard let speechRecognizer, speechRecognizer.isAvailable else {
+            lastError = "Riconoscimento vocale non disponibile."
+            return
+        }
+
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
+        }
+
+        audioEngine.prepare()
+        try audioEngine.start()
+        isListening = true
+
+        recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self else { return }
+            Task { @MainActor in
+                if let result {
+                    self.transcribedText = result.bestTranscription.formattedString
+                    if result.isFinal {
+                        self.onCommandReady?(self.transcribedText)
+                        self.stopListening()
+                    }
+                }
+                if error != nil {
+                    self.stopListening()
+                }
+            }
+        }
+    }
+
+    func stopListening() {
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        isListening = false
+    }
+
+    // MARK: - Risposta vocale
+
+    func speak(_ text: String, onFinish: (() -> Void)? = nil) {
+        speechCompletion = onFinish
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "it-IT")
+        utterance.rate = 0.5
+        synthesizer.speak(utterance)
+    }
+}
+
+extension VoiceEngine: AVSpeechSynthesizerDelegate {
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        Task { @MainActor in self.isSpeaking = true }
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            self.isSpeaking = false
+            self.speechCompletion?()
+            self.speechCompletion = nil
+        }
+    }
+}
