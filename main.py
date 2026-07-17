@@ -13,3 +13,13 @@ while True:
 
     risposta = jarvis.think(comando)
     print("Jarvis:", risposta)
+from command import esegui_comando
+
+print("Jarvis avviato. Sistema online.")
+
+while True:
+    comando = input("Tu: ")
+
+    risposta = esegui_comando(comando)
+
+    print("Jarvis:", risposta)
