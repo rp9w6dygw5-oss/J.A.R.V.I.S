@@ -1,0 +1,12 @@
+JarvisApp/
+├── Core/
+│   ├── VoiceEngine (Speech + AVSpeechSynthesizer)
+│   ├── HandTrackingEngine (Vision framework)
+│   ├── WeatherService (WeatherKit)
+│   └── WebActions (apertura Safari via URL scheme)
+├── SceneKit3D/ (o RealityKit per i progetti 3D)
+├── UI/
+│   ├── HUDOverlay (pannelli circolari, scanline, glow)
+│   ├── ParticleFX (Metal shaders per effetti olografici)
+│   └── Theme (blu/ciano neon, font monospace, sfondo nero)
+└── Memory/ (CoreData o file locali per "apprendimento")
