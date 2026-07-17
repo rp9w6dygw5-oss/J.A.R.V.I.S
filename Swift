@@ -1,0 +1,34 @@
+import Foundation
+
+enum JarvisIntent {
+    case time
+    case weather
+    case webSearch(query: String)
+    case unknown
+}
+
+/// Analizza il testo trascritto e lo trasforma in un intento eseguibile.
+/// Semplice matching per parole chiave: facile da estendere con nuovi comandi.
+enum CommandInterpreter {
+
+    static func interpret(_ rawText: String) -> JarvisIntent {
+        let text = rawText.lowercased()
+
+        if text.contains("che ore") || text.contains("che ora") {
+            return .time
+        }
+
+        if text.contains("meteo") || text.contains("che tempo fa") || text.contains("previsioni") {
+            return .weather
+        }
+
+        if text.contains("cerca") {
+            // "cerca ricette di pasta" -> query = "ricette di pasta"
+            let query = text.replacingOccurrences(of: "cerca", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return query.isEmpty ? .unknown : .webSearch(query: query)
+        }
+
+        return .unknown
+    }
+}
