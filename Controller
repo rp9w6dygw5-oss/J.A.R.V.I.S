@@ -1,0 +1,126 @@
+import Foundation
+import SwiftUI
+import WeatherKit
+import CoreLocation
+
+enum JarvisState {
+    case waitingForWakeWord   // ascolta in sottofondo aspettando "Jarvis"
+    case listeningForCommand  // ha sentito il wake word, ora ascolta il comando vero
+    case thinking             // sta elaborando la risposta
+    case speaking             // sta rispondendo
+}
+
+@MainActor
+final class JarvisController: ObservableObject {
+
+    @Published var state: JarvisState = .waitingForWakeWord
+    @Published var lastHeard: String = ""
+
+    let voice = VoiceEngine()
+    private let wakeWord = "jarvis"
+    private let locationManager = CLLocationManager()
+
+    init() {
+        voice.onCommandReady = { [weak self] text in
+            self?.handleTranscription(text)
+        }
+    }
+
+    /// Da chiamare all'avvio dell'app (dopo aver ottenuto i permessi)
+    func start() async {
+        guard await voice.requestAuthorization() else {
+            voice.lastError = "Permessi microfono/riconoscimento vocale negati."
+            return
+        }
+        beginCycle()
+    }
+
+    private func beginCycle() {
+        do {
+            try voice.startListening()
+        } catch {
+            voice.lastError = error.localizedDescription
+            // Riprova tra poco invece di bloccarsi
+            Task {
+                try? await Task.sleep(for: .seconds(1))
+                beginCycle()
+            }
+        }
+    }
+
+    private func handleTranscription(_ text: String) {
+        lastHeard = text
+        let lowered = text.lowercased()
+
+        switch state {
+        case .waitingForWakeWord:
+            if lowered.contains(wakeWord) {
+                state = .listeningForCommand
+                voice.speak("Sì?") { [weak self] in
+                    self?.beginCycle() // torna ad ascoltare, ora per il comando vero
+                }
+            } else {
+                beginCycle() // continua ad aspettare il wake word
+            }
+
+        case .listeningForCommand:
+            state = .thinking
+            Task { await execute(lowered) }
+
+        case .thinking, .speaking:
+            break // ignora input mentre sta già rispondendo
+        }
+    }
+
+    private func execute(_ text: String) async {
+        let intent = CommandInterpreter.interpret(text)
+        let response: String
+
+        switch intent {
+        case .time:
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            formatter.locale = Locale(identifier: "it-IT")
+            response = "Sono le \(formatter.string(from: Date()))."
+
+        case .weather:
+            response = await fetchWeatherSummary()
+
+        case .webSearch(let query):
+            response = "Cerco \(query) su Safari."
+            openSafariSearch(for: query)
+
+        case .unknown:
+            response = "Non ho capito il comando, puoi ripetere?"
+        }
+
+        state = .speaking
+        voice.speak(response) { [weak self] in
+            self?.state = .waitingForWakeWord
+            self?.beginCycle() // torna in ascolto passivo del wake word
+        }
+    }
+
+    // MARK: - Azioni concrete
+
+    private func fetchWeatherSummary() async -> String {
+        guard let location = locationManager.location else {
+            return "Non riesco ad accedere alla posizione per il meteo."
+        }
+        do {
+            let weather = try await WeatherService.shared.weather(for: location)
+            let temp = Int(weather.currentWeather.temperature.value)
+            let condition = weather.currentWeather.condition.description
+            return "Ci sono \(temp) gradi con cielo \(condition.lowercased())."
+        } catch {
+            return "Non sono riuscito a recuperare il meteo."
+        }
+    }
+
+    private func openSafariSearch(for query: String) {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        if let url = URL(string: "https://www.google.com/search?q=\(encoded)") {
+            UIApplication.shared.open(url)
+        }
+    }
+}
